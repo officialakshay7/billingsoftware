@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0F172A" />
+  <title>Maa Computer &amp; Electronics — Inventory Suite</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css" />
+  <link rel="stylesheet" href="/inventory.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+
+  <script type="module">
+    // Firebase cloud-sync wrapper (ESM via CDN). Exposes window.MaaCloud.
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    let _app = null, _db = null, _unsub = null;
+    window.MaaCloud = {
+      get ready() { return !!_db; },
+      async init(config) {
+        _app = initializeApp(config, "maa-" + Date.now().toString(36));
+        _db = getFirestore(_app);
+        return true;
+      },
+      async push(shopId, data) {
+        if (!_db) throw new Error("Firebase not initialised");
+        await setDoc(doc(_db, "maaInventory", shopId), { data: JSON.stringify(data), updatedAt: Date.now() });
+      },
+      async pull(shopId) {
+        if (!_db) throw new Error("Firebase not initialised");
+        const s = await getDoc(doc(_db, "maaInventory", shopId));
+        if (!s.exists()) return null;
+        return JSON.parse(s.data().data);
+      },
+      subscribe(shopId, onChange) {
+        if (!_db) throw new Error("Firebase not initialised");
+        if (_unsub) _unsub();
+        _unsub = onSnapshot(doc(_db, "maaInventory", shopId), (s) => {
+          if (s.exists()) onChange(JSON.parse(s.data().data), s.data().updatedAt);
+        });
+      },
+      unsubscribe() { if (_unsub) { _unsub(); _unsub = null; } }
+    };
+    window.dispatchEvent(new Event("maa-cloud-ready"));
+  </script>
+</head>
+<body>
+  <div id="app">
+    <!-- SIDEBAR -->
+    <aside class="sidebar" data-testid="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><i class="fa-solid fa-bolt"></i></div>
+        <div>
+          <div class="brand-title">Maa Computer</div>
+          <div class="brand-sub">&amp; Electronics</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="#dashboard" class="nav-item active" data-route="dashboard" data-testid="nav-dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
+        <a href="#pos" class="nav-item" data-route="pos" data-testid="nav-pos"><i class="fa-solid fa-cash-register"></i><span>POS / Billing</span></a>
+        <a href="#products" class="nav-item" data-route="products" data-testid="nav-products"><i class="fa-solid fa-boxes-stacked"></i><span>Products</span></a>
+        <a href="#inventory" class="nav-item" data-route="inventory" data-testid="nav-inventory"><i class="fa-solid fa-warehouse"></i><span>Stock In / Out</span></a>
+        <a href="#invoices" class="nav-item" data-route="invoices" data-testid="nav-invoices"><i class="fa-solid fa-file-invoice"></i><span>Invoices</span></a>
+        <a href="#categories" class="nav-item" data-route="categories" data-testid="nav-categories"><i class="fa-solid fa-tags"></i><span>Categories</span></a>
+        <a href="#suppliers" class="nav-item" data-route="suppliers" data-testid="nav-suppliers"><i class="fa-solid fa-truck-field"></i><span>Suppliers</span></a>
+        <a href="#po" class="nav-item" data-route="po" data-testid="nav-po"><i class="fa-solid fa-file-circle-plus"></i><span>Purchase Orders</span></a>
+        <a href="#reports" class="nav-item" data-route="reports" data-testid="nav-reports"><i class="fa-solid fa-chart-line"></i><span>Reports</span></a>
+        <a href="#settings" class="nav-item" data-route="settings" data-testid="nav-settings"><i class="fa-solid fa-gear"></i><span>Settings</span></a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="ip-pill" id="ipPill" data-testid="ip-pill">
+          <span class="dot"></span>
+          <span id="ipText">checking IP…</span>
+        </div>
+        <div class="version">v1.0 · local</div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 id="pageTitle">Dashboard</h1>
+          <p id="pageSub" class="topbar-sub">Live overview of your shop</p>
+        </div>
+        <div class="topbar-right">
+          <div class="quick-scan">
+            <i class="fa-solid fa-barcode"></i>
+            <input id="globalScan" type="text" placeholder="Scan barcode anywhere — Enter to commit" data-testid="global-scan-input" autocomplete="off" />
+          </div>
+          <button class="btn btn-ghost" id="exportBackup" data-testid="export-backup-btn" title="Export JSON backup"><i class="fa-solid fa-cloud-arrow-down"></i></button>
+          <button class="btn btn-ghost" id="importBackupBtn" data-testid="import-backup-btn" title="Import JSON backup"><i class="fa-solid fa-cloud-arrow-up"></i></button>
+          <input id="importBackupFile" type="file" accept="application/json" hidden />
+        </div>
+      </header>
+
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+
+  <!-- Modal mount -->
+  <div id="modalRoot"></div>
+
+  <!-- Toast mount -->
+  <div id="toastRoot" class="toast-root" data-testid="toast-root"></div>
+
+  <!-- Lock screen overlay -->
+  <div id="lockScreen" class="lock-screen hidden" data-testid="lock-screen">
+    <div class="lock-card">
+      <div class="lock-mark"><i class="fa-solid fa-bolt"></i></div>
+      <h2 id="lockShopName">Maa Computer &amp; Electronics</h2>
+      <p class="muted">Enter staff PIN to continue</p>
+      <input type="password" id="lockPinInput" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="••••" data-testid="lock-pin-input" autocomplete="off"/>
+      <button id="lockSubmit" data-testid="lock-submit-btn" class="btn btn-primary btn-lg">Unlock</button>
+      <div class="lock-foot">Secured by SHA-256 · stored locally on this device</div>
+    </div>
+  </div>
+
+  <!-- Templates -->
+  <template id="tpl-dashboard">
+    <div class="stack-lg">
+      <div class="stat-grid">
+        <div class="stat-card stat-cyan">
+          <div class="stat-icon"><i class="fa-solid fa-boxes-stacked"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Total Products</div>
+            <div class="stat-value" id="stTotalProducts">0</div>
+            <div class="stat-meta" id="stTotalSkus">0 SKUs</div>
+          </div>
+        </div>
+        <div class="stat-card stat-emerald">
+          <div class="stat-icon"><i class="fa-solid fa-sack-rupee"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Stock Value</div>
+            <div class="stat-value mono" id="stStockValue">₹0</div>
+            <div class="stat-meta">at cost price</div>
+          </div>
+        </div>
+        <div class="stat-card stat-amber">
+          <div class="stat-icon"><i class="fa-solid fa-receipt"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Today's Sales</div>
+            <div class="stat-value mono" id="stTodaySales">₹0</div>
+            <div class="stat-meta"><span id="stTodayOrders">0</span> orders</div>
+          </div>
+        </div>
+        <div class="stat-card stat-rose">
+          <div class="stat-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+          <div class="stat-body">
+            <div class="stat-label">Low Stock</div>
+            <div class="stat-value" id="stLowStock">0</div>
+            <div class="stat-meta">need restocking</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Sales — last 14 days</h3>
+            <span class="muted mono" id="dashRange"></span>
+          </div>
+          <div class="panel-body chart-wrap">
+            <canvas id="salesChart"></canvas>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Low stock alerts</h3>
+            <a href="#products" class="link-mini">View all</a>
+          </div>
+          <div class="panel-body" id="lowStockList"></div>
+        </div>
+      </div>
+
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>Top selling products</h3><span class="muted">by quantity</span></div>
+          <div class="panel-body" id="topSellingList"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Recent activity</h3><span class="muted">latest 8</span></div>
+          <div class="panel-body" id="recentActivity"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-products">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <div class="search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="prodSearch" type="text" placeholder="Search name, SKU, category…" data-testid="product-search" />
+        </div>
+        <div class="toolbar-right">
+          <select id="prodFilterCat" class="select" data-testid="product-filter-category"></select>
+          <button class="btn btn-ghost" id="prodPrintAll" data-testid="print-all-barcodes-btn"><i class="fa-solid fa-print"></i> Print all barcodes</button>
+          <button class="btn btn-primary" id="prodAdd" data-testid="add-product-btn"><i class="fa-solid fa-plus"></i> Add Product</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="table-wrap">
+          <table class="table" data-testid="products-table">
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Product</th>
+                <th>Category</th>
+                <th>Supplier</th>
+                <th class="num">Cost</th>
+                <th class="num">Price</th>
+                <th class="num">Stock</th>
+                <th>Barcode</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="prodTbody"></tbody>
+          </table>
+        </div>
+        <div id="prodEmpty" class="empty hidden">
+          <i class="fa-solid fa-box-open"></i>
+          <h4>No products yet</h4>
+          <p>Add your first product to generate a barcode.</p>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-inventory">
+    <div class="stack-lg">
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>Scan to update stock</h3><span class="muted">use camera or paste SKU</span></div>
+          <div class="panel-body stack-md">
+            <div class="scan-row">
+              <input id="invScanInput" class="scan-input" placeholder="Scan or type barcode/SKU…" data-testid="inv-scan-input" autocomplete="off" />
+              <button class="btn btn-dark" id="invCameraBtn" data-testid="inv-camera-btn"><i class="fa-solid fa-camera"></i> Camera</button>
+            </div>
+            <div id="invScanResult" class="scan-result"></div>
+            <div class="adjust-row">
+              <label class="seg">
+                <input type="radio" name="invMode" value="in" checked /> <span><i class="fa-solid fa-arrow-down"></i> Stock In</span>
+              </label>
+              <label class="seg">
+                <input type="radio" name="invMode" value="out" /> <span><i class="fa-solid fa-arrow-up"></i> Stock Out</span>
+              </label>
+              <input id="invQty" type="number" min="1" value="1" class="qty" data-testid="inv-qty" />
+              <input id="invNote" type="text" placeholder="Note (optional)" class="note" data-testid="inv-note" />
+              <button id="invCommit" class="btn btn-primary" data-testid="inv-commit-btn"><i class="fa-solid fa-check"></i> Commit</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Manual adjust</h3><span class="muted">pick a product</span></div>
+          <div class="panel-body stack-md">
+            <select id="invProductSelect" class="select" data-testid="inv-product-select"></select>
+            <div id="invSelectedCard" class="muted">Select a product to view current stock.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Transaction history</h3><span class="muted">most recent</span></div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Time</th><th>Type</th><th>Product</th><th class="num">Qty</th><th>Note</th></tr></thead>
+            <tbody id="invHistory"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-pos">
+    <div class="pos-layout">
+      <div class="pos-left">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Scan or select products</h3>
+            <span class="muted" id="posIpHint"></span>
+          </div>
+          <div class="panel-body stack-md">
+            <div class="scan-row">
+              <input id="posScanInput" class="scan-input" placeholder="Scan barcode — auto adds to cart" data-testid="pos-scan-input" autocomplete="off" />
+              <button class="btn btn-dark" id="posCameraBtn" data-testid="pos-camera-btn"><i class="fa-solid fa-camera"></i> Camera</button>
+            </div>
+            <div class="search">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input id="posProdSearch" placeholder="Or search by name…" data-testid="pos-prod-search" />
+            </div>
+            <div id="posProductGrid" class="prod-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="pos-right">
+        <div class="cart-panel">
+          <div class="cart-head">
+            <h3><i class="fa-solid fa-cart-shopping"></i> Cart</h3>
+            <button class="link-mini danger" id="cartClear" data-testid="cart-clear-btn">Clear</button>
+          </div>
+          <div id="cartList" class="cart-list"></div>
+          <div class="cart-foot">
+            <div class="cust-row">
+              <input id="custName" placeholder="Customer name (optional)" data-testid="cust-name" />
+              <input id="custPhone" placeholder="Phone" data-testid="cust-phone" />
+            </div>
+            <div class="totals">
+              <div><span>Subtotal</span><span class="mono" id="cartSubtotal">₹0</span></div>
+              <div>
+                <span>Discount %</span>
+                <input type="number" min="0" max="100" value="0" id="cartDiscount" class="mini-input mono" data-testid="cart-discount" />
+              </div>
+              <div>
+                <span>Tax (GST) %</span>
+                <input type="number" min="0" max="100" value="0" id="cartTax" class="mini-input mono" data-testid="cart-tax" />
+              </div>
+              <div class="grand">
+                <span>Grand Total</span><span class="mono" id="cartGrand">₹0</span>
+              </div>
+            </div>
+            <div class="pay-row">
+              <select id="payMethod" class="select" data-testid="pay-method">
+                <option value="cash">Cash</option>
+                <option value="upi">UPI</option>
+                <option value="card">Card</option>
+                <option value="other">Other</option>
+              </select>
+              <button id="checkoutBtn" class="btn btn-primary btn-lg" data-testid="checkout-btn"><i class="fa-solid fa-receipt"></i> Checkout</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </template>
+
+  <template id="tpl-invoices">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <div class="search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="invSearch" placeholder="Search invoice no, customer…" data-testid="invoices-search" />
+        </div>
+        <div class="toolbar-right">
+          <input id="invDateFrom" type="date" class="select" data-testid="inv-date-from"/>
+          <input id="invDateTo" type="date" class="select" data-testid="inv-date-to"/>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table class="table" data-testid="invoices-table">
+            <thead><tr><th>Invoice #</th><th>Date</th><th>Customer</th><th class="num">Items</th><th class="num">Total</th><th>Payment</th><th></th></tr></thead>
+            <tbody id="invoicesTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-categories">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <h3 class="muted">Categories</h3>
+        <button class="btn btn-primary" id="catAdd" data-testid="add-category-btn"><i class="fa-solid fa-plus"></i> Add Category</button>
+      </div>
+      <div class="panel"><div class="chip-grid" id="catGrid"></div></div>
+    </div>
+  </template>
+
+  <template id="tpl-suppliers">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <h3 class="muted">Suppliers</h3>
+        <button class="btn btn-primary" id="supAdd" data-testid="add-supplier-btn"><i class="fa-solid fa-plus"></i> Add Supplier</button>
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table class="table">
+            <thead><tr><th>Name</th><th>Contact</th><th>Phone</th><th>Address</th><th></th></tr></thead>
+            <tbody id="supTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-reports">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <div class="seg-group">
+          <button class="seg-btn active" data-range="7">7d</button>
+          <button class="seg-btn" data-range="30">30d</button>
+          <button class="seg-btn" data-range="90">90d</button>
+          <button class="seg-btn" data-range="365">1y</button>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-ghost" id="exportSalesCsv" data-testid="export-sales-csv"><i class="fa-solid fa-file-csv"></i> Export CSV</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card stat-cyan"><div class="stat-icon"><i class="fa-solid fa-coins"></i></div><div class="stat-body"><div class="stat-label">Revenue</div><div class="stat-value mono" id="repRev">₹0</div></div></div>
+        <div class="stat-card stat-emerald"><div class="stat-icon"><i class="fa-solid fa-receipt"></i></div><div class="stat-body"><div class="stat-label">Orders</div><div class="stat-value mono" id="repOrders">0</div></div></div>
+        <div class="stat-card stat-amber"><div class="stat-icon"><i class="fa-solid fa-cart-shopping"></i></div><div class="stat-body"><div class="stat-label">Items Sold</div><div class="stat-value mono" id="repItems">0</div></div></div>
+        <div class="stat-card stat-rose"><div class="stat-icon"><i class="fa-solid fa-chart-line"></i></div><div class="stat-body"><div class="stat-label">Avg Order</div><div class="stat-value mono" id="repAvg">₹0</div></div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Revenue trend</h3></div>
+        <div class="panel-body chart-wrap"><canvas id="repChart"></canvas></div>
+      </div>
+
+      <div class="panel-grid">
+        <div class="panel"><div class="panel-head"><h3>Top products</h3></div><div class="panel-body" id="repTop"></div></div>
+        <div class="panel"><div class="panel-head"><h3>Sales by category</h3></div><div class="panel-body chart-wrap"><canvas id="repCatChart"></canvas></div></div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-po">
+    <div class="stack-lg">
+      <div class="toolbar">
+        <h3 class="muted">Purchase Orders</h3>
+        <button class="btn btn-primary" id="poAdd" data-testid="add-po-btn"><i class="fa-solid fa-plus"></i> New Purchase Order</button>
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table class="table" data-testid="po-table">
+            <thead><tr><th>PO #</th><th>Date</th><th>Supplier</th><th class="num">Items</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+            <tbody id="poTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-settings">
+    <div class="stack-lg">
+      <div class="panel">
+        <div class="panel-head"><h3>Shop info</h3></div>
+        <div class="panel-body grid-2">
+          <label>Shop name <input id="setShopName" type="text" data-testid="set-shop-name"/></label>
+          <label>Phone <input id="setShopPhone" type="text" data-testid="set-shop-phone"/></label>
+          <label class="span-2">Address <input id="setShopAddr" type="text" data-testid="set-shop-addr"/></label>
+          <label>GSTIN <input id="setShopGstin" type="text" data-testid="set-shop-gstin"/></label>
+          <label>Currency symbol <input id="setCurrency" type="text" value="₹" data-testid="set-currency"/></label>
+          <label>Default GST % <input id="setTax" type="number" min="0" max="100" data-testid="set-tax"/></label>
+          <label>Low-stock threshold <input id="setLowStock" type="number" min="0" data-testid="set-low-stock"/></label>
+        </div>
+        <div class="panel-foot"><button class="btn btn-primary" id="setSaveShop" data-testid="set-save-shop">Save</button></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Scanner IP whitelist</h3><span class="muted">only these IPs can use the camera scanner</span></div>
+        <div class="panel-body stack-md">
+          <div class="muted">Your detected public IP: <code class="mono" id="setDetectedIp">…</code> <button class="link-mini" id="setUseMyIp">use this</button></div>
+          <div class="chip-grid" id="ipChips"></div>
+          <div class="scan-row">
+            <input id="setIpInput" placeholder="e.g. 203.0.113.42" class="scan-input" data-testid="set-ip-input"/>
+            <button class="btn btn-primary" id="setIpAdd" data-testid="set-ip-add">Add IP</button>
+          </div>
+          <label class="check-row"><input type="checkbox" id="setIpEnforce" data-testid="set-ip-enforce"/> Enforce IP restriction for barcode scanner</label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Staff PIN lock</h3><span class="muted">protects the app on shared devices</span></div>
+        <div class="panel-body stack-md">
+          <label class="check-row"><input type="checkbox" id="setPinEnabled" data-testid="set-pin-enabled"/> Require PIN on app open</label>
+          <div class="grid-2-inline">
+            <label>PIN (4–6 digits) <input id="setPinInput" type="password" inputmode="numeric" maxlength="6" placeholder="set new PIN" data-testid="set-pin-input"/></label>
+            <label>Auto-lock after (minutes, 0 = off) <input id="setAutoLock" type="number" min="0" max="240" data-testid="set-auto-lock"/></label>
+          </div>
+          <div class="row-actions" style="padding:0">
+            <button class="btn btn-primary" id="setPinSave" data-testid="set-pin-save"><i class="fa-solid fa-lock"></i> Save PIN</button>
+            <button class="btn btn-ghost" id="setPinClear" data-testid="set-pin-clear"><i class="fa-solid fa-lock-open"></i> Remove PIN</button>
+            <button class="btn btn-ghost" id="setLockNow" data-testid="set-lock-now"><i class="fa-solid fa-lock"></i> Lock now</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Cloud sync (Firebase · free)</h3><span class="muted">sync across phone &amp; PC</span></div>
+        <div class="panel-body stack-md">
+          <div class="cloud-status" id="cloudStatus"></div>
+          <details class="cloud-help" data-testid="cloud-help">
+            <summary>How to set up (one-time, ~3 minutes)</summary>
+            <ol>
+              <li>Go to <a href="https://console.firebase.google.com" target="_blank" rel="noopener">console.firebase.google.com</a> and click <b>Add project</b> (free Spark plan).</li>
+              <li>In the project, click <b>Build → Firestore Database → Create database</b>. Choose <b>Start in test mode</b> for now (or paste the rules below).</li>
+              <li>Click the gear icon → <b>Project settings</b> → scroll to <b>Your apps</b> → click <b>&lt;/&gt; (Web)</b> → register an app called "Maa Inventory" → copy the <code>firebaseConfig</code> object.</li>
+              <li>Paste it below as JSON and click <b>Connect</b>.</li>
+              <li>Click <b>Push to cloud</b> to upload. On your other device, paste the same config + same Shop ID and click <b>Pull from cloud</b>.</li>
+            </ol>
+            <div class="cloud-rules">
+              <div class="muted" style="font-size:12px;margin-bottom:4px">Recommended Firestore rules (paste in Firestore → Rules):</div>
+              <pre data-testid="cloud-rules">rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    match /maaInventory/{shopId} {
+      // Anyone who knows the Shop ID can sync. Keep your Shop ID secret.
+      allow read, write: if true;
+    }
+  }
+}</pre>
+            </div>
+          </details>
+          <label class="full">Firebase config (paste JSON from Firebase Console)
+            <textarea id="setCloudConfig" rows="6" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' data-testid="set-cloud-config"></textarea>
+          </label>
+          <label>Shop ID (auto-generated; copy to your other device) <input id="setShopId" type="text" data-testid="set-shop-id"/></label>
+          <label class="check-row"><input type="checkbox" id="setAutoSync" data-testid="set-auto-sync"/> Auto-push to cloud after every change</label>
+          <div class="row-actions" style="padding:0">
+            <button class="btn btn-primary" id="setCloudConnect" data-testid="set-cloud-connect"><i class="fa-solid fa-plug"></i> Connect</button>
+            <button class="btn btn-ghost" id="setCloudPush" data-testid="set-cloud-push"><i class="fa-solid fa-cloud-arrow-up"></i> Push to cloud</button>
+            <button class="btn btn-ghost" id="setCloudPull" data-testid="set-cloud-pull"><i class="fa-solid fa-cloud-arrow-down"></i> Pull from cloud</button>
+            <button class="btn btn-ghost" id="setCloudDisconnect" data-testid="set-cloud-disconnect"><i class="fa-solid fa-link-slash"></i> Disconnect</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Backup &amp; Reset</h3></div>
+        <div class="panel-body row-actions">
+          <button class="btn btn-ghost" id="setExport" data-testid="set-export"><i class="fa-solid fa-cloud-arrow-down"></i> Export data (JSON)</button>
+          <button class="btn btn-ghost" id="setImport" data-testid="set-import"><i class="fa-solid fa-cloud-arrow-up"></i> Import data (JSON)</button>
+          <button class="btn btn-danger" id="setReset" data-testid="set-reset"><i class="fa-solid fa-trash"></i> Reset all data</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <script src="inventory.js" defer></script>
+</body>
+</html>
